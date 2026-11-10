@@ -1,5 +1,5 @@
 "use strict";
-/* Bot-Status v23: Daten nur verschluesselt (AES-GCM, Schluessel via PBKDF2-SHA256 aus dem Zugangscode).
+/* Bot-Status v25: Daten nur verschluesselt (AES-GCM, Schluessel via PBKDF2-SHA256 aus dem Zugangscode).
    Gespraechsanzeige per Push (ntfy.sh, Topic nur in den verschluesselten Daten), Kachel-Reload alle 17 s nur im Gespraech. */
 const RAW_LIVE = "https://raw.githubusercontent.com/R25-foodporn/bot-status/live/live.enc.json";
 const NTFY = "https://ntfy.sh/";
@@ -22,6 +22,7 @@ let esLastId = "";
 let esRetry = 0;
 let esRetryTimer = null;
 let showOld = false;
+let showMoreUrgent = false;
 
 /* ---------- Krypto (auch in Node testbar) ---------- */
 const subtle = (typeof crypto !== "undefined" && crypto.subtle) ? crypto.subtle : null;
@@ -343,8 +344,8 @@ function formatTime(value) {
 
 function contentKey(data) {
   return JSON.stringify({
-    waitingOnMark: data.waitingOnMark,
-    urgent: data.urgent,
+    pending: data.pending,
+    topics: data.topics,
     bots: data.bots,
     weeklyUsage: data.weeklyUsage,
     w: Math.floor(Date.now() / 600000)
@@ -389,8 +390,8 @@ function render(root, data) {
   lastDataKey = key;
 
   const call = (lastLive && lastLive.currentCall !== undefined) ? lastLive.currentCall : data.currentCall;
-  const waiting = Array.isArray(data.waitingOnMark) ? data.waitingOnMark : [];
-  const urgent = Array.isArray(data.urgent) ? data.urgent : [];
+  const pending = (Array.isArray(data.pending) ? data.pending : []).filter((p) => p && !p.done);
+  const topics = Array.isArray(data.topics) ? data.topics : [];
   const bots = Array.isArray(data.bots) ? data.bots : [];
   const usageText = (lastLive && lastLive.weeklyUsage) || data.weeklyUsage || "";
 
@@ -406,24 +407,57 @@ function render(root, data) {
   const now = Date.now();
   const isRecent = (item) => { const t = Date.parse(item && item.at); return !t || now - t <= WINDOW_MS; };
   const shortDate = (v) => { const t = new Date(v); return Number.isNaN(t.getTime()) ? "" : new Intl.DateTimeFormat("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit" }).format(t); };
-  const oldToggle = (n) => n ? `<button type="button" class="old-toggle" data-toggle-old>${showOld ? "Ältere ausblenden" : n + (n === 1 ? " älterer Eintrag" : " ältere Einträge") + " (über 72 h) anzeigen"}</button>` : "";
-  const waitingNew = waiting.filter(isRecent);
-  const urgentNew = urgent.filter(isRecent);
-  const waitingShown = showOld ? waiting : waitingNew;
-  const urgentShown = showOld ? urgent : urgentNew;
+  const fmtWhen = (v, withTime) => {
+    const t = new Date(v);
+    if (Number.isNaN(t.getTime())) return "";
+    const o = { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit" };
+    if (withTime) { o.hour = "2-digit"; o.minute = "2-digit"; o.hourCycle = "h23"; }
+    return new Intl.DateTimeFormat("de-CH", o).format(t).replace(",", "");
+  };
+  const fristLabel = (p) => {
+    if (!p.frist) return p.fristText || "";
+    const t = new Date(p.frist);
+    const hm = new Intl.DateTimeFormat("de-CH", { timeZone: "Europe/Zurich", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(t);
+    const base = fmtWhen(p.frist, hm !== "23:59" && hm !== "00:00");
+    return p.fristText ? base + " " + p.fristText : base;
+  };
+  const fristMs = (p) => { const t = Date.parse(p.frist); return Number.isNaN(t) ? Infinity : t; };
+  const prioOf = (p) => Number(p.prio) || 2;
+  const urgentSort = (x, y) => (fristMs(x) - fristMs(y)) || (prioOf(x) - prioOf(y)) || String(x.since || "").localeCompare(String(y.since || ""));
+  const dringend = pending.filter((p) => p.dringend).sort(urgentSort);
+  const pendSorted = dringend.concat(pending.filter((p) => !p.dringend).sort((x, y) => String(y.since || "").localeCompare(String(x.since || ""))));
+  const row = (cls, bot, when, text, extra, detail) =>
+    `<li><button type="button" class="row ${cls}" data-drill data-key="${escapeHtml(bot)}" data-title="${escapeHtml(text)}" data-detail="${escapeHtml(detail || text)}" data-source="${escapeHtml(when)}"><span class="row-meta"><b>${escapeHtml(bot)}</b> ${escapeHtml(when)}${extra || ""}</span><span class="row-text">${escapeHtml(text)}</span></button></li>`;
 
-  const waitingHtml = (waitingShown.length
-    ? `<ol class="need-list">${waitingShown.map((item, i) => {
-        const letter = String.fromCharCode(97 + i);
-        return itemButton(letter, item.title || item.need, item.detail || item.need, item.source || item.bot || "");
+  const pendHtml = pendSorted.length
+    ? `<ol class="rows rows-big">${pendSorted.map((p) => {
+        const overdue = p.dringend && fristMs(p) < now;
+        const tag = p.dringend ? ` <span class="tag-urgent${overdue ? " overdue" : ""}">dringend${fristLabel(p) ? " bis " + escapeHtml(fristLabel(p)) : ""}</span>` : "";
+        return row(p.dringend ? "is-urgent" : "", p.bot || "", "seit " + fmtWhen(p.since, false), p.title || "", tag, p.detail);
       }).join("")}</ol>`
-    : `<p class="empty">In den letzten 72 Stunden wartet niemand auf eine Entscheidung von dir.</p>`) + oldToggle(waiting.length - waitingNew.length);
+    : `<p class="empty">Gerade ist nichts für dich pendent.</p>`;
 
-  const urgentHtml = (urgentShown.length
-    ? `<ol class="need-list">${urgentShown.map((item, i) => {
-        return itemButton(String(i + 1), item.title || item.need, item.detail || item.need, item.source || "");
-      }).join("")}</ol>`
-    : `<p class="empty">In den letzten 72 Stunden nichts Dringendes.</p>`) + oldToggle(urgent.length - urgentNew.length);
+  const URG_MAX = 6;
+  const urgShown = showMoreUrgent ? dringend : dringend.slice(0, URG_MAX);
+  const urgHtml = dringend.length
+    ? `<ol class="rows rows-urgent">${urgShown.map((p) => {
+        const overdue = fristMs(p) < now;
+        return row("is-urgent" + (overdue ? " overdue" : ""), p.bot || "", fristLabel(p) || "ohne Frist", p.title || "", "", p.detail);
+      }).join("")}</ol>` + (dringend.length > URG_MAX
+        ? `<button type="button" class="more-toggle" data-toggle-urgent>${showMoreUrgent ? "Weniger" : "Weitere (" + (dringend.length - URG_MAX) + ")"}</button>`
+        : "")
+    : `<p class="empty">Nichts Zeitkritisches.</p>`;
+
+  const topicsSorted = topics.slice().sort((x, y) => String(y.at || "").localeCompare(String(x.at || "")));
+  const TOP_MAX = 8;
+  const topicsRecent = topicsSorted.filter(isRecent);
+  const topicsShown = showOld ? topicsSorted : topicsRecent.slice(0, TOP_MAX);
+  const hiddenTopics = topicsSorted.length - topicsShown.length;
+  const topicsHtml = (topicsShown.length
+    ? `<ol class="rows rows-small">${topicsShown.map((t) => row("", t.bot || "", fmtWhen(t.at, true), t.title || "", "", t.detail)).join("")}</ol>`
+    : `<p class="empty">In den letzten 72 Stunden nichts besprochen.</p>`) +
+    ((showOld ? topicsSorted.length > Math.min(topicsRecent.length, TOP_MAX) : hiddenTopics > 0)
+      ? `<button type="button" class="more-toggle" data-toggle-old>${showOld ? "Weniger" : "Ältere (" + hiddenTopics + ")"}</button>` : "");
 
   const botsHtml = bots.map((bot) => {
     const status = (bot.status || "bereit").toLowerCase();
@@ -448,12 +482,14 @@ function render(root, data) {
     <section class="section">
       <div class="top-grid">
         <article class="need need-tall need-wide">
-          <h2>Was als Nächstes von mir gebraucht wird</h2>
-          ${waitingHtml}
+          <h2>Pendent für dich</h2>
+          ${pendHtml}
         </article>
         <article class="need need-tall urgent-tile">
-          <h2>Dringendes</h2>
-          ${urgentHtml}
+          <h2 class="h-urgent">Dringend</h2>
+          ${urgHtml}
+          <h2 class="h-recent">Zuletzt besprochen</h2>
+          ${topicsHtml}
         </article>
       </div>
     </section>
@@ -476,6 +512,10 @@ function render(root, data) {
   `;
 
   root.onclick = function (event) {
+    if (event.target.closest("[data-toggle-urgent]")) {
+      showMoreUrgent = !showMoreUrgent; lastDataKey = ""; render(root, lastStatus || data); if (lastLive) applyLive(lastLive);
+      return;
+    }
     if (event.target.closest("[data-toggle-old]")) {
       showOld = !showOld; lastDataKey = ""; render(root, lastStatus || data); if (lastLive) applyLive(lastLive);
       return;

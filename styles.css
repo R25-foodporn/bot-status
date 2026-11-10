@@ -297,3 +297,24 @@ body { padding-top: 26px; }
 .bot.stale { opacity: .6; }
 .stale-note { font-size: 12px; opacity: .8; }
 #reload-mode { opacity: .8; }
+
+/* v25: Pendent / Dringend / Zuletzt besprochen */
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows li + li { margin-top: 6px; }
+.row { display: block; width: 100%; text-align: left; background: transparent; border: 0; color: inherit; font: inherit; padding: 4px 0; cursor: pointer; }
+.row-meta { display: block; font-size: 13px; color: var(--muted); }
+.row-meta b { color: var(--text); font-weight: 700; }
+.row-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rows-big .row-text { font-size: 18px; line-height: 1.3; }
+.rows-urgent .row-text { font-size: 16px; font-weight: 600; }
+.rows-small .row-text { font-size: 14px; }
+.rows-small .row-meta { font-size: 12px; }
+.rows-urgent .row { border-left: 4px solid #e5484d; padding-left: 8px; background: rgba(229, 72, 77, .10); border-radius: 6px; }
+.rows-urgent .row .row-meta { color: #e5484d; font-weight: 700; }
+.rows-urgent .row.overdue { background: rgba(229, 72, 77, .25); }
+.tag-urgent { color: #e5484d; font-weight: 700; }
+.tag-urgent.overdue { text-decoration: underline; }
+.rows-big .row.is-urgent { border-left: 4px solid #e5484d; padding-left: 8px; }
+.h-urgent { color: #e5484d; }
+.h-recent { margin-top: 14px !important; }
+.more-toggle { display: inline-block; margin-top: 8px; min-height: 44px; min-width: 120px; padding: 8px 14px; font: inherit; font-size: 16px; color: inherit; background: none; border: 1px dashed currentColor; border-radius: 10px; opacity: .85; cursor: pointer; }
