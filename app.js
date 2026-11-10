@@ -52,7 +52,9 @@ if (typeof module !== "undefined" && module.exports) {
 }
 
 /* ---------- Gerät, Speicher ---------- */
+const DEVICE_NAME_KEY = "botstatus-device-name";
 function detectDevice() {
+  try { const n = localStorage.getItem(DEVICE_NAME_KEY); if (n) return n; } catch (err) {}
   const ua = navigator.userAgent || "";
   if (/Tesla|QtCarBrowser/i.test(ua)) return "Tesla";
   if (/iPhone/i.test(ua)) return "iPhone";
@@ -435,7 +437,34 @@ function render(root, data) {
 
 
 async function boot() {
-  document.getElementById("device").textContent = "Gerät: " + detectDevice();
+  const devEl = document.getElementById("device");
+  devEl.textContent = "Gerät: " + detectDevice();
+  devEl.style.cursor = "pointer";
+  devEl.title = "Antippen, um den Gerätenamen festzulegen";
+  devEl.addEventListener("click", function openEditor() {
+    if (document.getElementById("device-edit")) return;
+    const box = document.createElement("span");
+    box.id = "device-edit";
+    const inp = document.createElement("input");
+    inp.type = "text"; inp.maxLength = 30; inp.placeholder = "z. B. Tesla";
+    inp.value = localStorage.getItem(DEVICE_NAME_KEY) || "";
+    inp.style.cssText = "font-size:16px;width:9em;margin-left:6px;";
+    const ok = document.createElement("button");
+    ok.type = "button"; ok.textContent = "Speichern";
+    ok.style.cssText = "font-size:16px;margin-left:4px;";
+    const save = () => {
+      const v = inp.value.trim();
+      if (v) localStorage.setItem(DEVICE_NAME_KEY, v); else localStorage.removeItem(DEVICE_NAME_KEY);
+      devEl.textContent = "Gerät: " + detectDevice();
+      box.remove();
+    };
+    ok.addEventListener("click", (e) => { e.stopPropagation(); save(); });
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); });
+    inp.addEventListener("click", (e) => e.stopPropagation());
+    box.appendChild(inp); box.appendChild(ok);
+    devEl.after(box);
+    inp.focus();
+  });
   try {
     if (!localStorage.getItem("botstatus-ua-ok")) {
       const ua = document.createElement("div");
