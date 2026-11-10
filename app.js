@@ -436,6 +436,17 @@ function render(root, data) {
 
 async function boot() {
   document.getElementById("device").textContent = "Gerät: " + detectDevice();
+  try {
+    if (!localStorage.getItem("botstatus-ua-ok")) {
+      const ua = document.createElement("div");
+      ua.id = "ua-raw";
+      ua.textContent = "Kennung: " + (navigator.userAgent || "(leer)") + " · Antippen zum Ausblenden";
+      ua.style.cssText = "font-size:11px;opacity:.75;word-break:break-all;margin-top:4px;cursor:pointer;";
+      ua.addEventListener("click", () => { localStorage.setItem("botstatus-ua-ok", "1"); ua.remove(); });
+      document.querySelector(".topbar").appendChild(ua);
+    }
+    console.log("User-Agent:", navigator.userAgent);
+  } catch (err) {}
   document.getElementById("logout").onclick = function (e) { e.preventDefault(); logout(); };
   if (!subtle) { document.getElementById("app").innerHTML = '<div class="error">Dieser Browser unterstützt die nötige Verschlüsselung nicht.</div>'; return; }
   const m = /[#&]code=([^&]+)/.exec(location.hash || "");
