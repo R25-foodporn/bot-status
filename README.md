@@ -1,0 +1,1 @@
+Nur verschlüsselte Live-Daten.
