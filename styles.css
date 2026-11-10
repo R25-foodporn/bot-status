@@ -292,3 +292,8 @@ body { padding-top: 26px; }
   font-weight: 600;
 }
 .login .msg { min-height: 1.2em; font-size: 14px; color: var(--wartet); margin: 0; }
+
+.old-toggle { margin-top: 8px; background: none; border: 1px dashed currentColor; color: inherit; opacity: .7; font: inherit; font-size: 14px; padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+.bot.stale { opacity: .6; }
+.stale-note { font-size: 12px; opacity: .8; }
+#reload-mode { opacity: .8; }

@@ -1,21 +1,27 @@
 "use strict";
-/* Bot-Status v17: Daten nur verschluesselt (AES-GCM, Schluessel via PBKDF2-SHA256 aus dem Zugangscode). */
-const REPO_API_LIVE = "https://api.github.com/repos/R25-foodporn/bot-status/contents/live.enc.json?ref=live";
+/* Bot-Status v23: Daten nur verschluesselt (AES-GCM, Schluessel via PBKDF2-SHA256 aus dem Zugangscode).
+   Gespraechsanzeige per Push (ntfy.sh, Topic nur in den verschluesselten Daten), Kachel-Reload alle 17 s nur im Gespraech. */
 const RAW_LIVE = "https://raw.githubusercontent.com/R25-foodporn/bot-status/live/live.enc.json";
-const RAW_POLL_MS = 9000;
+const NTFY = "https://ntfy.sh/";
 const STORE_KEY = "botstatus.auth.v1";
 const VALID_MS = 180 * 24 * 60 * 60 * 1000;
-const STATUS_POLL_MS = 6000;
-const LIVE_POLL_MS = 3000;
+const CALL_RELOAD_MS = 17000;           // Kachel-Reload nur waehrend eines Gespraechs
+const WINDOW_MS = 72 * 60 * 60 * 1000;  // Kacheln zeigen Eintraege der letzten 72 h
+const RECONNECT_MS = [2000, 5000, 10000, 30000];
 
 let hasRendered = false;
 let lastDataKey = "";
 let lastLive = null;
+let lastStatus = null;
 let aesKey = null;
-let statusTimer = null;
-let liveTimer = null;
-let liveEtag = null;
+let callTimer = null;
 let running = false;
+let pushTopic = "";
+let es = null;
+let esLastId = "";
+let esRetry = 0;
+let esRetryTimer = null;
+let showOld = false;
 
 /* ---------- Krypto (auch in Node testbar) ---------- */
 const subtle = (typeof crypto !== "undefined" && crypto.subtle) ? crypto.subtle : null;
@@ -43,7 +49,11 @@ function importAesKey(raw) {
   return subtle.importKey("raw", raw, { name: "AES-GCM" }, false, ["decrypt"]);
 }
 async function decryptJson(key, env) {
-  const plain = await subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(env.iv) }, key, b64ToBytes(env.ct));
+  let plain = await subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(env.iv) }, key, b64ToBytes(env.ct));
+  if (env.z) {
+    const stream = new Blob([plain]).stream().pipeThrough(new DecompressionStream("gzip"));
+    plain = await new Response(stream).arrayBuffer();
+  }
   return JSON.parse(new TextDecoder().decode(plain));
 }
 
@@ -131,13 +141,32 @@ async function tryCode(code) {
 }
 
 /* ---------- Laden ---------- */
+function stampOf(d) { return String((d && (d.published || d.updated)) || ""); }
+
+function takeStatus(data) {
+  if (!data) return;
+  if (lastStatus && stampOf(data) < stampOf(lastStatus)) return; // aelter als das Angezeigte
+  lastStatus = data;
+  render(document.getElementById("app"), data);
+  hasRendered = true;
+  if (lastLive) applyLive(lastLive);
+  const topic = data.push && data.push.topic;
+  if (topic && topic !== pushTopic) { pushTopic = topic; connectPush(); }
+}
+
+function takeLiveData(data) {
+  if (!data) return;
+  if (lastLive && stampOf(data) < stampOf(lastLive)) return;
+  lastLive = data;
+  applyLive(data);
+}
+
+/* Status von GitHub Pages: ?ts= umgeht den Pages-Zwischenspeicher (max-age=600), kein API-Limit. */
 async function loadStatus() {
   try {
     const env = await fetchEnc("status.enc.json");
     const data = await decryptJson(aesKey, env);
-    render(document.getElementById("app"), data);
-    hasRendered = true;
-    if (lastLive) applyLive(lastLive);
+    takeStatus(data);
   } catch (err) {
     if (err && err.name === "OperationError") { localStorage.removeItem(STORE_KEY); showLogin("Bitte Code neu eingeben."); return; }
     if (!hasRendered) {
@@ -146,103 +175,113 @@ async function loadStatus() {
   }
 }
 
-let apiNextAt = 0;
-let rawNextAt = 0;
-let visibleSince = Date.now();
-
-/* GitHub-API: schnell (Sekunden), aber ohne Login nur 60 Abfragen pro Stunde und IP, auch 304 zählt.
-   Darum wird das Budget gleichmässig bis zum Reset verteilt; raw.githubusercontent (Zwischenspeicher bis 5 Min.) läuft als Ersatz mit. */
-function scheduleApi(res) {
-  const remaining = Number(res.headers.get("x-ratelimit-remaining"));
-  const reset = Number(res.headers.get("x-ratelimit-reset")) * 1000;
-  const now = Date.now();
-  if (!Number.isFinite(remaining) || !reset) { apiNextAt = now + 60000; return; }
-  if (remaining <= 3) { apiNextAt = Math.max(reset, now + 60000); return; }
-  // Erste 2 Minuten nach dem Öffnen: alle 5 s, solange genug Budget da ist; danach gleichmässig verteilen.
-  if (now - visibleSince < 120000 && remaining > 30) { apiNextAt = now + 5000; return; }
-  apiNextAt = now + Math.max(LIVE_POLL_MS, (reset - now) / (remaining - 3));
+/* Ersatzweg fuer den Gespraechsstand: raw.githubusercontent (kein API-Limit, bis 5 Min. zwischengespeichert).
+   Nur einmal beim (Wieder)Verbinden, nie periodisch. */
+async function loadLiveOnce() {
+  try { takeLiveData(await decryptJson(aesKey, await fetchEnc(RAW_LIVE))); } catch (err) {}
 }
 
-async function loadLiveApi() {
-  const headers = { "Accept": "application/vnd.github.raw" };
-  if (liveEtag) headers["If-None-Match"] = liveEtag;
-  const res = await fetch(REPO_API_LIVE, { cache: "no-store", headers: headers });
-  if (res.status === 403 || res.status === 429) {
-    const retry = Number(res.headers.get("retry-after")) * 1000;
-    const reset = Number(res.headers.get("x-ratelimit-reset")) * 1000;
-    apiNextAt = Math.max(Date.now() + 60000, retry ? Date.now() + retry : 0, reset || 0);
-    throw new Error("rate");
-  }
-  scheduleApi(res);
-  if (res.status === 304) return null;
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  const tag = res.headers.get("ETag");
-  if (tag) liveEtag = tag;
-  return JSON.parse(await res.text());
-}
-
-async function takeLive(env) {
-  if (!env) return;
+async function takePushMessage(text) {
   try {
-    const data = await decryptJson(aesKey, env);
-    if (!lastLive || String(data.updated || "") > String(lastLive.updated || "")) {
-      lastLive = data;
-      applyLive(data);
-    } else if (lastLive && String(data.updated || "") === String(lastLive.updated || "")) {
-      applyLive(lastLive);
-    }
+    const payload = await decryptJson(aesKey, JSON.parse(text));
+    if (payload.status) takeStatus(payload.status);
+    if (payload.live) takeLiveData(payload.live);
   } catch (err) {}
 }
 
-async function loadLive() {
-  const jobs = [];
-  if (Date.now() >= rawNextAt) {
-    rawNextAt = Date.now() + RAW_POLL_MS;
-    jobs.push(fetchEnc(RAW_LIVE).then(takeLive, function () {}));
-  }
-  if (Date.now() >= apiNextAt) {
-    apiNextAt = Date.now() + LIVE_POLL_MS;
-    jobs.push(loadLiveApi().then(takeLive, function () {
-      // Fehler oder Sperre: nicht hämmern, mindestens 60 s warten
-      apiNextAt = Math.max(apiNextAt, Date.now() + 60000);
-    }));
-  }
-  await Promise.all(jobs);
+/* ---------- Push-Kanal ntfy.sh (Topic steht nur verschluesselt in den Daten) ---------- */
+function closePush() {
+  if (esRetryTimer) { clearTimeout(esRetryTimer); esRetryTimer = null; }
+  if (es) { es.close(); es = null; }
+}
+function connectPush() {
+  closePush();
+  if (!running || !pushTopic || document.visibilityState === "hidden" || typeof EventSource === "undefined") return;
+  // since=: Verpasstes seit der letzten bekannten Nachricht (sonst der letzten 12 h) wird nachgeliefert.
+  const since = esLastId || "12h";
+  const src = new EventSource(NTFY + encodeURIComponent(pushTopic) + "/sse?since=" + encodeURIComponent(since));
+  es = src;
+  src.onopen = function () { esRetry = 0; };
+  src.onmessage = function (ev) {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.event !== "message" || !msg.message) return;
+      if (msg.id) esLastId = msg.id;
+      takePushMessage(msg.message);
+    } catch (err) {}
+  };
+  src.onerror = function () {
+    // Funkloch o. ae.: selbst neu verbinden (mit Pause), dabei Stand einmal nachfragen
+    if (es !== src) return;
+    src.close(); es = null;
+    const wait = RECONNECT_MS[Math.min(esRetry, RECONNECT_MS.length - 1)];
+    esRetry++;
+    esRetryTimer = setTimeout(function () { esRetryTimer = null; resync(); }, wait);
+  };
+}
+function pushOpen() { return !!(es && es.readyState === 1); }
+
+/* Einmal nachfragen: Status + Gespraechsstand, dann Push (neu) verbinden. */
+function resync() {
+  if (!running || !aesKey || document.visibilityState === "hidden") return;
+  loadStatus();
+  loadLiveOnce();
+  connectPush();
 }
 
-/* ---------- Timer nur bei sichtbarer Seite ---------- */
+/* ---------- 17-s-Reload nur waehrend eines Gespraechs ---------- */
+let callTicks = 0;
+function inCall() { return !!(lastLive && lastLive.currentCall && lastLive.currentCall.bot); }
+async function pollNtfyOnce() {
+  if (!pushTopic) return;
+  try {
+    const r = await fetch(NTFY + encodeURIComponent(pushTopic) + "/json?poll=1&since=" + encodeURIComponent(esLastId || "12h"), { cache: "no-store" });
+    if (!r.ok) return;
+    for (const line of (await r.text()).split("\n")) {
+      if (!line.trim()) continue;
+      const msg = JSON.parse(line);
+      if (msg.event === "message" && msg.message) { if (msg.id) esLastId = msg.id; await takePushMessage(msg.message); }
+    }
+  } catch (err) {}
+}
+async function callTick() {
+  callTicks++;
+  const jobs = [loadStatus()];
+  // Ist der Push-Kanal offen, kommen neue Daten ohnehin in Sekunden; sonst bei ntfy nachfragen.
+  if (!pushOpen()) jobs.push(pollNtfyOnce());
+  await Promise.all(jobs);
+}
+function updateCallReload() {
+  const want = running && inCall() && document.visibilityState !== "hidden";
+  if (want && !callTimer) {
+    callTimer = setInterval(callTick, CALL_RELOAD_MS);
+  } else if (!want && callTimer) {
+    clearInterval(callTimer); callTimer = null;
+  }
+  const ind = document.getElementById("reload-mode");
+  const text = callTimer ? "· im Gespräch alle 17 s neu" : "";
+  if (ind && ind.textContent !== text) ind.textContent = text;
+}
+
+/* ---------- Timer und Push nur bei sichtbarer Seite ---------- */
 function stopTimers() {
-  if (statusTimer) clearTimeout(statusTimer);
-  if (liveTimer) clearTimeout(liveTimer);
-  statusTimer = liveTimer = null;
+  if (callTimer) { clearInterval(callTimer); callTimer = null; }
+  closePush();
 }
 function startTimers() {
   stopTimers();
-  rawNextAt = 0;
-  visibleSince = Date.now();
   if (!running || !aesKey || document.visibilityState === "hidden") return;
-  const statusLoop = function () {
-    loadStatus().finally(function () {
-      if (running && document.visibilityState !== "hidden") statusTimer = setTimeout(statusLoop, STATUS_POLL_MS);
-    });
-  };
-  const liveLoop = function () {
-    loadLive().finally(function () {
-      if (running && document.visibilityState !== "hidden") liveTimer = setTimeout(liveLoop, LIVE_POLL_MS);
-    });
-  };
-  liveLoop();
-  statusTimer = setTimeout(statusLoop, hasRendered ? 0 : STATUS_POLL_MS);
+  resync();
+  updateCallReload();
 }
 
 function startDashboard(initialData) {
   running = true;
   document.getElementById("logout").hidden = false;
-  if (initialData) {
-    render(document.getElementById("app"), initialData);
-    hasRendered = true;
-  }
-  startTimers();
+  if (initialData) takeStatus(initialData);
+  loadLiveOnce();
+  connectPush();
+  updateCallReload();
 }
 
 function applyLive(live) {
@@ -267,6 +306,7 @@ function applyLive(live) {
   if (usageEl && live.weeklyUsage && usageEl.textContent !== live.weeklyUsage) {
     usageEl.textContent = live.weeklyUsage;
   }
+  updateCallReload();
 }
 
 function escapeHtml(value) {
@@ -306,7 +346,8 @@ function contentKey(data) {
     waitingOnMark: data.waitingOnMark,
     urgent: data.urgent,
     bots: data.bots,
-    weeklyUsage: data.weeklyUsage
+    weeklyUsage: data.weeklyUsage,
+    w: Math.floor(Date.now() / 600000)
   });
 }
 
@@ -362,28 +403,39 @@ function render(root, data) {
     callLiveClass += " idle";
   }
 
-  const waitingHtml = waiting.length
-    ? `<ol class="need-list">${waiting.map((item, i) => {
+  const now = Date.now();
+  const isRecent = (item) => { const t = Date.parse(item && item.at); return !t || now - t <= WINDOW_MS; };
+  const shortDate = (v) => { const t = new Date(v); return Number.isNaN(t.getTime()) ? "" : new Intl.DateTimeFormat("de-CH", { timeZone: "Europe/Zurich", day: "2-digit", month: "2-digit" }).format(t); };
+  const oldToggle = (n) => n ? `<button type="button" class="old-toggle" data-toggle-old>${showOld ? "Ältere ausblenden" : n + (n === 1 ? " älterer Eintrag" : " ältere Einträge") + " (über 72 h) anzeigen"}</button>` : "";
+  const waitingNew = waiting.filter(isRecent);
+  const urgentNew = urgent.filter(isRecent);
+  const waitingShown = showOld ? waiting : waitingNew;
+  const urgentShown = showOld ? urgent : urgentNew;
+
+  const waitingHtml = (waitingShown.length
+    ? `<ol class="need-list">${waitingShown.map((item, i) => {
         const letter = String.fromCharCode(97 + i);
         return itemButton(letter, item.title || item.need, item.detail || item.need, item.source || item.bot || "");
       }).join("")}</ol>`
-    : `<p class="empty">Gerade wartet niemand auf eine Entscheidung von dir.</p>`;
+    : `<p class="empty">In den letzten 72 Stunden wartet niemand auf eine Entscheidung von dir.</p>`) + oldToggle(waiting.length - waitingNew.length);
 
-  const urgentHtml = urgent.length
-    ? `<ol class="need-list">${urgent.map((item, i) => {
+  const urgentHtml = (urgentShown.length
+    ? `<ol class="need-list">${urgentShown.map((item, i) => {
         return itemButton(String(i + 1), item.title || item.need, item.detail || item.need, item.source || "");
       }).join("")}</ol>`
-    : `<p class="empty">Gerade nichts Dringendes.</p>`;
+    : `<p class="empty">In den letzten 72 Stunden nichts Dringendes.</p>`) + oldToggle(urgent.length - urgentNew.length);
 
   const botsHtml = bots.map((bot) => {
     const status = (bot.status || "bereit").toLowerCase();
     const needed = bot.input || bot.task || "Keine Eingabe nötig";
+    const recent = isRecent(bot);
+    const stale = recent ? "" : ` <span class="stale-note">(Stand ${escapeHtml(shortDate(bot.at))}, älter als 72 h)</span>`;
     return `
-      <article class="bot">
+      <article class="bot${recent ? "" : " stale"}">
         <span class="badge ${escapeHtml(status)}">${escapeHtml(status)}</span>
         <p class="name">${escapeHtml(bot.name)}</p>
         <p class="input-label">Eingabe von dir</p>
-        <p class="task">${escapeHtml(needed)}</p>
+        <p class="task">${escapeHtml(needed)}${stale}</p>
       </article>
     `;
   }).join("");
@@ -410,7 +462,7 @@ function render(root, data) {
       <div class="grid">${botsHtml}</div>
     </section>
     <div class="updated">
-      <span>Aktualisiert: <span id="clock">${escapeHtml(stamp)}</span></span>
+      <span>Aktualisiert: <span id="clock">${escapeHtml(stamp)}</span> <span id="reload-mode"></span></span>
       <span id="usage">${escapeHtml(usageText)}</span>
     </div>
     <div id="drilldown" class="drilldown" hidden>
@@ -424,6 +476,10 @@ function render(root, data) {
   `;
 
   root.onclick = function (event) {
+    if (event.target.closest("[data-toggle-old]")) {
+      showOld = !showOld; lastDataKey = ""; render(root, lastStatus || data); if (lastLive) applyLive(lastLive);
+      return;
+    }
     const item = event.target.closest("[data-drill]");
     if (item) {
       openDrill(root, item.getAttribute("data-key"), item.getAttribute("data-title"), item.getAttribute("data-detail"), item.getAttribute("data-source"));
