@@ -1,0 +1,294 @@
+:root {
+  --bg: #0f0f12;
+  --panel: #1a1b20;
+  --panel-2: #22242b;
+  --text: #f3f4f6;
+  --muted: #9aa0aa;
+  --line: #2c2e36;
+  --aktiv: #3dd68c;
+  --wartet: #f5b942;
+  --bereit: #7d8390;
+  --call: #6ea8ff;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+body {
+  min-height: 100vh;
+  padding: 12px 14px 16px;
+}
+.wrap { max-width: 1280px; margin: 0 auto; }
+.updated {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 10px;
+  text-align: left;
+  margin: 12px 0 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+#usage { flex: 0 0 auto; }
+.note {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+  margin-bottom: 10px;
+}
+h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.section { margin-bottom: 10px; }
+.call-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+.call-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.call-live {
+  color: var(--call);
+  font-size: 13px;
+  font-weight: 600;
+}
+.call-live.idle { color: var(--bereit); }
+.top-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.need-wide { grid-column: span 2; }
+.need-tall {
+  min-height: 176px;
+}
+.need-tall h2 { margin: 0 0 6px; }
+.input-label {
+  margin: 0 0 2px;
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.need-list {
+  margin: 0;
+  padding-left: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text);
+  list-style: none;
+}
+.need-list li {
+  margin: 0;
+  padding: 0;
+}
+.need-list li + li { margin-top: 4px; }
+.need-item {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35em;
+  width: 100%;
+  margin: 0;
+  padding: 1px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.need-item:hover .need-text,
+.need-item:focus .need-text { text-decoration: underline; }
+.need-letter {
+  flex: 0 0 auto;
+  font-weight: 700;
+}
+.need-source {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.need-text {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drilldown {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 20;
+}
+.drilldown[hidden] { display: none; }
+.drilldown-card {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  max-width: 560px;
+  width: 100%;
+}
+.drilldown-key {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--call);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.drilldown-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 700;
+}
+.drilldown-body {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+}
+.drilldown-close {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.call, .need, .bot {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 10px;
+  min-height: 0;
+}
+.bot { min-height: 88px; }
+.call {
+  border-color: #2a3d63;
+  background: #151a26;
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.needs { display: grid; gap: 8px; }
+.name {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 3px;
+}
+.task, .empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--text);
+}
+.empty { color: var(--muted); }
+.badge {
+  display: inline-block;
+  margin-bottom: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.badge.aktiv { background: rgba(61,214,140,.15); color: var(--aktiv); }
+.badge.wartet { background: rgba(245,185,66,.15); color: var(--wartet); }
+.badge.bereit { background: rgba(125,131,144,.15); color: var(--bereit); }
+.badge.gespraech { background: rgba(110,168,255,.15); color: var(--call); }
+.error {
+  background: #3a1d1d;
+  color: #ffb4b4;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+/* Anmeldung, Gerät, Abmelden (v17) */
+body { padding-top: 26px; }
+.topbar {
+  position: fixed;
+  top: 6px;
+  right: 12px;
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--muted);
+  z-index: 20;
+}
+.topbar a { color: var(--muted); }
+.login {
+  min-height: calc(100vh - 80px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(420px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px;
+}
+.login label { font-size: 15px; color: var(--muted); }
+.login input {
+  font-size: 28px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+}
+.login button {
+  font-size: 20px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 0;
+  background: var(--call);
+  color: #0f0f12;
+  font-weight: 600;
+}
+.login .msg { min-height: 1.2em; font-size: 14px; color: var(--wartet); margin: 0; }
